@@ -1,0 +1,11 @@
+[Unit]
+Description=Custom touchpad gesture daemon (3-finger minimize/restore, pinch app switch)
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/sg input -c "/usr/bin/python3 /home/jay/.local/bin/touchpad-gestures.py"
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

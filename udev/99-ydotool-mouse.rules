@@ -1,0 +1,1 @@
+SUBSYSTEM=="input", ATTRS{name}=="ydotoold virtual device", ENV{ID_INPUT_MOUSE}="1"

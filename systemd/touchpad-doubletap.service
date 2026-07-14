@@ -1,0 +1,11 @@
+[Unit]
+Description=Double-tap-to-click daemon (tap-to-click stays off, only a quick double tap clicks)
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/sg input -c "/usr/bin/python3 /home/jay/.local/bin/touchpad-doubletap.py"
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

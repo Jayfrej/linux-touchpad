@@ -1,0 +1,15 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "jay"
+            }
+        ],
+        "Description": "Registers global shortcuts used by the custom touchpad gesture daemon (minimize/restore active window)",
+        "Icon": "preferences-system-windows",
+        "Id": "gesture-helper",
+        "License": "GPL",
+        "Name": "Gesture Helper",
+        "Version": "1.0"
+    }
+}
