@@ -31,10 +31,30 @@ else
     echo "    Found touchpad at $DEV_PATH"
 fi
 
+echo "==> Detecting keyboard event device (used for Shift+pinch zoom)"
+KBD_PATH=""
+for evdir in /sys/class/input/event*; do
+    name_file="$evdir/device/name"
+    [ -f "$name_file" ] || continue
+    if grep -qi "keyboard" "$name_file"; then
+        KBD_PATH="/dev/input/$(basename "$evdir")"
+        break
+    fi
+done
+if [ -z "$KBD_PATH" ]; then
+    echo "    Could not auto-detect the keyboard device. Edit KEYBOARD_DEVICE= manually in:"
+    echo "    ~/.local/bin/touchpad-gestures.py"
+    KBD_PATH="/dev/input/event2"
+else
+    echo "    Found keyboard at $KBD_PATH"
+fi
+
 echo "==> Installing the gesture daemons to ~/.local/bin"
 mkdir -p "$HOME/.local/bin"
-sed "s#DEVICE = \".*\"#DEVICE = \"$DEV_PATH\"#" bin/touchpad-gestures.py > "$HOME/.local/bin/touchpad-gestures.py"
-sed "s#DEVICE = \".*\"#DEVICE = \"$DEV_PATH\"#" bin/touchpad-doubletap.py > "$HOME/.local/bin/touchpad-doubletap.py"
+sed -e "s#^DEVICE = \".*\"#DEVICE = \"$DEV_PATH\"#" \
+    -e "s#^KEYBOARD_DEVICE = \".*\"#KEYBOARD_DEVICE = \"$KBD_PATH\"#" \
+    bin/touchpad-gestures.py > "$HOME/.local/bin/touchpad-gestures.py"
+sed "s#^DEVICE = \".*\"#DEVICE = \"$DEV_PATH\"#" bin/touchpad-doubletap.py > "$HOME/.local/bin/touchpad-doubletap.py"
 chmod +x "$HOME/.local/bin/touchpad-gestures.py" "$HOME/.local/bin/touchpad-doubletap.py"
 
 echo "==> Installing the KWin script (gesture-helper: minimize/restore shortcuts)"
@@ -84,5 +104,9 @@ gdbus call --session --dest org.kde.KWin --object-path /VirtualDesktopManager \
     --method org.kde.KWin.VirtualDesktopManager.createDesktop 2 "Desktop 3" || true
 gdbus call --session --dest org.kde.KWin --object-path /VirtualDesktopManager \
     --method org.kde.KWin.VirtualDesktopManager.createDesktop 3 "Desktop 4" || true
+
+echo "==> One manual step this script can't automate: open the panel, right-click the"
+echo "    Application Dashboard icon > Configure Keyboard Shortcut > bind it to Ctrl+Alt+D"
+echo "    (that exact combo is hardcoded as APP_DASHBOARD_SHORTCUT in touchpad-gestures.py)"
 
 echo "==> Done. See README.md for what each piece does and how to verify it."

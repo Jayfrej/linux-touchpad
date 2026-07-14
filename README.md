@@ -7,8 +7,9 @@ raw touchpad signals ourselves and drives KDE/Opera through D-Bus and synthetic 
 events instead of depending on those broken/missing native paths.
 
 Machine this was built on: Fedora 44, KDE Plasma 6.6/6.7, touchpad `SYNA32AA:00 06CB:CE17`
-at `/dev/input/event5`. **The event number is machine-specific and can change on a fresh
-install or after a kernel/driver update** — always re-detect it (see `install.sh`).
+at `/dev/input/event5`, keyboard `AT Translated Set 2 keyboard` at `/dev/input/event2`.
+**Both event numbers are machine-specific and can change on a fresh install or after a
+kernel/driver update** — always re-detect them (see `install.sh`).
 
 ## What's active right now
 
@@ -18,7 +19,7 @@ install or after a kernel/driver update** — always re-detect it (see `install.
 | 2 | `kcminputrc`: `NaturalScroll=true` | Mac-style natural scroll direction | ✅ was already on by default |
 | 3 | 4 virtual desktops (`kwinrc [Desktops]`) | Gives the native 3-finger left/right swipe (desktop switch) something to do | ✅ working, **but has reset itself to 1 desktop at least once this session for no clear reason — check `Number=` in `kwinrc [Desktops]` after every reboot** |
 | 4 | `gesture-helper` KWin script | Registers two custom global shortcuts (`GestureMinimizeActive`, `GestureRestoreLastMinimized`) that our daemon calls | ✅ working, **but does not reliably auto-load from `kwinrc` on a fresh boot — see "Troubleshooting: 3-finger swipe stops working after a reboot" below. `kwin-script-loader.service` force-loads it every session as a workaround.** |
-| 5 | `touchpad-gestures.service` | 3-finger up/down → minimize/restore window · pinch → switch app (Alt+Tab) · fast 2-finger horizontal scroll → Alt+Left/Right (Opera back/forward) | ✅ working |
+| 5 | `touchpad-gestures.service` | 3-finger up/down → minimize/restore window · two quick 3-finger taps → Application Dashboard · pinch → switch app, Shift+pinch → zoom in/out · fast 2-finger horizontal scroll → Alt+Left/Right (Opera back/forward) | ✅ working |
 | 6 | `touchpad-doubletap.service` | Two quick light taps = one click (single light taps still do nothing) | ✅ confirmed working end-to-end |
 | 7 | `ydotool` + `ydotoold` | Lets our daemons send real key/click events on Wayland | ✅ working, **but see the "ydotool gotchas" section — the obvious commands don't work** |
 | 8 | `99-ydotool-mouse.rules` (udev) | Tags ydotool's virtual input device as a mouse | ✅ applied. Note: even with this, synthetic **mouse motion** (`ydotool mousemove`) still does not move the cursor — see below. Only needed for the click path; may not even be required for that (never isolated/retested without it). |
@@ -31,8 +32,10 @@ install or after a kernel/driver update** — always re-detect it (see `install.
 | Two quick light taps | Click *(unverified, see #6 above)* |
 | 3-finger swipe down | Minimize active window |
 | 3-finger swipe up | Restore the window minimized by the swipe above |
+| **Two quick 3-finger taps** (no dragging) | Open the Application Dashboard (`org.kde.plasma.kickerdash`, the app-grid widget pinned to the bottom panel) — sends Ctrl+Alt+D, a shortcut bound to the real applet by hand, see below |
 | 3-finger swipe left/right | Switch virtual desktop (native Plasma default) |
 | Pinch in / out | Switch to previous / next app (`Walk Through Windows (Reverse)` / `Walk Through Windows`) |
+| **Shift + pinch in / out** | Zoom out / in (KWin's built-in Zoom accessibility effect, `view_zoom_out` / `view_zoom_in`) — fires proportionally as you pinch, not just once per gesture |
 | 4-finger swipe up/down | Overview / Grid view (native Plasma default) |
 | Fast 2-finger swipe left/right (in-app, e.g. Opera) | Back / Forward (sends Alt+Left / Alt+Right) |
 | Two quick light taps | Click |
@@ -87,6 +90,19 @@ reverted — see "Rejected approaches" below).
   (`ABS_MT_TRACKING_ID`, `ABS_MT_POSITION_X/Y`) via `python-evdev`, tracking one contact
   per touch (down → up, short duration, little movement, no other finger down at the same
   time) and pairing up two of those within ~400ms.
+- **Application Dashboard: two quick 3-finger taps, same reason as above.** First tried
+  Shift+3-finger-swipe-up for this (see "Rejected approaches"), then a single 3-finger tap
+  once Shift proved unreliable — but a *light* 3-finger tap turned out to have the exact
+  same problem as the single-finger tap above: with `TapToClick=false`, libinput doesn't
+  emit anything for it, not even a zero-distance `GESTURE_SWIPE_BEGIN/END` pair (confirmed
+  empirically: capturing `libinput debug-events` during a real light 3-finger tap showed
+  literally no output). So this is read the same way as double-tap-to-click, just
+  generalized to require **3 contacts peaking at exactly 3** (more callers = palm/accidental
+  touch, fewer = not all fingers landed together) that all lift within `THREE_TAP_MAX_DURATION`
+  (0.4s) having moved less than 3% of the pad's width/height, then paired up two of those
+  clean taps within `THREE_TAP_DOUBLE_WINDOW` (0.5s) — requiring two taps instead of firing
+  on the first was a deliberate choice (see below) to cut down on accidental triggers from
+  just resting/repositioning 3 fingers on the pad.
 
 ## ydotool gotchas (spent a while on these — don't repeat the debugging)
 
@@ -198,10 +214,24 @@ investigation:
 
 - This touchpad reports **every pinch gesture as `fingers=4`**, regardless of how many
   fingers you actually pinch with. There's no way to distinguish a "zoom" pinch from an
-  "app-switch" pinch by finger count on this hardware, so they *will* occasionally fire
-  together (confirmed happens sometimes, not every time — probably depends on how
-  reliably the browser's own native pinch-zoom fires on Wayland, which is itself spotty).
-  We accepted this trade-off rather than dropping pinch-to-switch-app entirely.
+  "app-switch" pinch by finger count on this hardware, so a plain pinch (no Shift) can
+  still occasionally also trigger an app's own native pinch-zoom underneath our
+  app-switch action (confirmed happens sometimes, not every time — probably depends on
+  how reliably the browser's own native pinch-zoom fires on Wayland, which is itself
+  spotty). We accepted this trade-off rather than dropping pinch-to-switch-app entirely.
+  **Holding Shift is the deliberate, reliable way to get zoom instead of app-switch** —
+  it's a keyboard-modifier check, not finger counting, so it doesn't depend on this
+  hardware quirk at all. Shift+pinch fires `view_zoom_in`/`view_zoom_out` (KWin's built-in
+  Zoom effect, confirmed loaded and working via `activeEffects` over D-Bus) proportionally
+  as the pinch scale changes, instead of the app-switch shortcuts.
+- **Reading Shift key state needs the keyboard's own event device**
+  (`KEYBOARD_DEVICE` in `touchpad-gestures.py`, currently `/dev/input/event2`,
+  `"AT Translated Set 2 keyboard"`). Like the touchpad's `DEVICE`, **this event number is
+  machine-specific and can change** — `install.sh` auto-detects it the same way it does
+  for the touchpad. The daemon reads it directly with `python-evdev` in a background
+  thread (there's no libinput/D-Bus API for "is Shift currently held" that a touchpad
+  daemon can just query), so it needs the same `input` group membership as the touchpad
+  device.
 - Finger-count detection itself (3 vs 4 for swipes) tested very reliably in a ~20-swipe
   test — no misdetections. But note this can never fully be "fixed" by anything in this
   repo even if it did misfire sometimes: KWin's native 3-finger-left/right desktop switch
@@ -223,6 +253,42 @@ investigation:
   (github.com/gbytedev/kwin-gestures) for a version that supports the API change first.
 - **Opera launch flag `--enable-features=TouchpadOverscrollHistoryNavigation`.** Doesn't
   do anything useful here — removed. See the Opera section above for why.
+- **Shift+3-finger-swipe-up for Application Dashboard.** The first design for this
+  feature: hold Shift, swipe 3 fingers up. Worked in principle (and Shift+pinch for zoom,
+  which uses the same "read Shift from the keyboard device" mechanism, still does) but
+  proved unreliable in practice for a *swipe specifically* — holding a keyboard modifier
+  with the same hand doing a 3-finger drag is awkward, and logging real attempts showed
+  both (a) the swipe distance landing well short of what a plain swipe clears, and (b) the
+  Shift key itself visibly flickering released for a frame mid-gesture. Tried fixing both
+  (lower distance threshold when Shift is held, decide Shift-held once at gesture start
+  instead of re-checking at the end, then accumulating distance across fragmented
+  sub-gestures) but it still felt effortful. Replaced with two quick 3-finger taps, which
+  needs no keyboard at all.
+- **`org.kde.plasma.kickerdash` via `plasmawindowed`.** Looked like a quick way to open
+  Application Dashboard without a keyboard shortcut (`plasmawindowed org.kde.plasma.kickerdash`)
+  but opens a **decorated standalone window** running a fresh instance of the widget, not
+  the real fullscreen panel popup — visually wrong (title bar, close button, floating
+  window) compared to what clicking the actual panel icon shows. Replaced with a Ctrl+Alt+D
+  shortcut bound directly to the real applet (right-click it in the panel → "Configure
+  Keyboard Shortcut"), which `open_app_dashboard()` in `touchpad-gestures.py` just replays
+  via `ydotool`.
+- **3-finger physical click → middle-click (libinput `clickfinger` method) as the
+  Dashboard trigger.** `libinput list-devices` shows this touchpad supports `clickfinger`
+  (3-finger click = middle button) but it isn't the active click method (`button-areas`
+  is). Considered switching to it and detecting `BTN_MIDDLE`, since it's a clean, discrete,
+  keyboard-free signal — but a real middle-click is a semantic event every app on the
+  system reacts to (X11 primary-selection paste, closing a browser tab under the pointer,
+  etc.), so repurposing it would mean **every** 3-finger click also does whatever
+  middle-click means to whatever's under the pointer at the time, not just open the
+  dashboard. Confirmed this machine currently has no other way to generate a middle-click
+  at all (laptop, no external mouse, `Middle emulation: disabled`) so nothing existing
+  would be *lost* by enabling it — the objection is the new side effect, not a conflict
+  with something already in use. Left click method alone; went with two quick taps instead,
+  which doesn't touch the OS's click semantics at all.
+- **A single (non-repeated) 3-finger tap for Application Dashboard.** Simpler than the
+  double-tap version, and worked, but fired too easily by accident (e.g. briefly resting or
+  repositioning 3 fingers on the pad). Requiring two taps within `THREE_TAP_DOUBLE_WINDOW`
+  cut that down, same tradeoff as why click-to-select vs. double-click-to-open exists.
 
 ## Reinstalling on a fresh machine
 
@@ -231,7 +297,9 @@ Run `./install.sh`. It will:
 2. Add you to the `input` group (needed to read `/dev/input/eventN` — **log out and back
    in afterward**, or the daemons will only work via the `sg input -c` wrapper already
    baked into the systemd units, which is enough for the *first* run without logging out)
-3. Auto-detect the touchpad's event device and patch it into both scripts
+3. Auto-detect the touchpad's **and** keyboard's event devices and patch both into
+   `touchpad-gestures.py` (the keyboard is only needed for Shift+pinch zoom, but the script
+   reads it unconditionally)
 4. Install the KWin script, the three systemd `--user` services (the two gesture
    daemons plus `kwin-script-loader`, which works around the KWin script not
    reliably auto-loading on its own — see Troubleshooting), `ydotoold`'s systemd
@@ -241,6 +309,12 @@ Run `./install.sh`. It will:
    only exists after KDE has seen the touchpad at least once
 6. Create 4 virtual desktops
 
+One more manual, one-time step **not** automated by `install.sh` (no reliable way found to
+script it — see "Rejected approaches"): open the panel, right-click the Application
+Dashboard icon → **Configure Keyboard Shortcut** → bind it to **Ctrl+Alt+D**. That exact
+combo is hardcoded as `APP_DASHBOARD_SHORTCUT` in `touchpad-gestures.py`; if you bind it to
+something else, update that constant to match.
+
 Everything in the status table above is confirmed working as of this writing — if
 something regresses after a reinstall, check the "ydotool gotchas" and "Known quirks"
 sections first, they cover everything that wasn't obvious the first time around.
@@ -248,7 +322,7 @@ sections first, they cover everything that wasn't obvious the first time around.
 ## Files in this repo
 
 ```
-bin/touchpad-gestures.py       3-finger swipes, pinch app-switch, 2-finger back/forward
+bin/touchpad-gestures.py       3-finger swipes/taps, pinch app-switch/zoom, 2-finger back/forward
 bin/touchpad-doubletap.py      double-tap-to-click
 bin/kwin-script-loader.sh      force-loads gesture-helper over D-Bus (see Troubleshooting)
 systemd/*.service              systemd --user units for the daemons + kwin-script-loader above
