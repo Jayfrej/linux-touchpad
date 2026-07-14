@@ -12,49 +12,14 @@ sudo usermod -aG input "$USER"
 echo "    NOTE: group membership only applies to NEW sessions. Either log out/in now,"
 echo "    or keep using 'sg input -c ...' (already baked into the service files) until you do."
 
-echo "==> Detecting touchpad event device"
-TOUCHPAD_EVENT=$(grep -B5 'Handlers=.*mouse' /proc/bus/input/devices | grep -B5 -i touchpad | true)
-DEV_PATH=""
-for evdir in /sys/class/input/event*; do
-    name_file="$evdir/device/name"
-    [ -f "$name_file" ] || continue
-    if grep -qi "touchpad" "$name_file"; then
-        DEV_PATH="/dev/input/$(basename "$evdir")"
-        break
-    fi
-done
-if [ -z "$DEV_PATH" ]; then
-    echo "    Could not auto-detect the touchpad device. Edit DEVICE= manually in:"
-    echo "    ~/.local/bin/touchpad-gestures.py and ~/.local/bin/touchpad-doubletap.py"
-    DEV_PATH="/dev/input/event5"
-else
-    echo "    Found touchpad at $DEV_PATH"
-fi
-
-echo "==> Detecting keyboard event device (used for Shift+pinch zoom)"
-KBD_PATH=""
-for evdir in /sys/class/input/event*; do
-    name_file="$evdir/device/name"
-    [ -f "$name_file" ] || continue
-    if grep -qi "keyboard" "$name_file"; then
-        KBD_PATH="/dev/input/$(basename "$evdir")"
-        break
-    fi
-done
-if [ -z "$KBD_PATH" ]; then
-    echo "    Could not auto-detect the keyboard device. Edit KEYBOARD_DEVICE= manually in:"
-    echo "    ~/.local/bin/touchpad-gestures.py"
-    KBD_PATH="/dev/input/event2"
-else
-    echo "    Found keyboard at $KBD_PATH"
-fi
-
 echo "==> Installing the gesture daemons to ~/.local/bin"
+echo "    (touchpad/keyboard event devices are auto-detected by name at daemon"
+echo "    startup -- see _find_device() in each script -- so no path patching"
+echo "    happens here, and it stays correct even if event numbers shift on a"
+echo "    later reboot or kernel/driver update; see README Troubleshooting if"
+echo "    a daemon still fails to find its device)"
 mkdir -p "$HOME/.local/bin"
-sed -e "s#^DEVICE = \".*\"#DEVICE = \"$DEV_PATH\"#" \
-    -e "s#^KEYBOARD_DEVICE = \".*\"#KEYBOARD_DEVICE = \"$KBD_PATH\"#" \
-    bin/touchpad-gestures.py > "$HOME/.local/bin/touchpad-gestures.py"
-sed "s#^DEVICE = \".*\"#DEVICE = \"$DEV_PATH\"#" bin/touchpad-doubletap.py > "$HOME/.local/bin/touchpad-doubletap.py"
+cp bin/touchpad-gestures.py bin/touchpad-doubletap.py "$HOME/.local/bin/"
 chmod +x "$HOME/.local/bin/touchpad-gestures.py" "$HOME/.local/bin/touchpad-doubletap.py"
 
 echo "==> Installing the KWin script (gesture-helper: minimize/restore shortcuts)"

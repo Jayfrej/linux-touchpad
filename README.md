@@ -6,10 +6,19 @@ prevents native 2-finger back/forward navigation on Linux Wayland. Everything he
 raw touchpad signals ourselves and drives KDE/Opera through D-Bus and synthetic key
 events instead of depending on those broken/missing native paths.
 
-Machine this was built on: Fedora 44, KDE Plasma 6.6/6.7, touchpad `SYNA32AA:00 06CB:CE17`
-at `/dev/input/event5`, keyboard `AT Translated Set 2 keyboard` at `/dev/input/event2`.
-**Both event numbers are machine-specific and can change on a fresh install or after a
-kernel/driver update** — always re-detect them (see `install.sh`).
+Machine this was built on: Fedora 44, KDE Plasma 6.6/6.7, touchpad `SYNA32AA:00 06CB:CE17`,
+keyboard `AT Translated Set 2 keyboard`.
+**Event numbers (`/dev/input/eventN`) are machine-specific and can change on a fresh
+install or after a kernel/driver update** — confirmed to happen again on a plain reboot on
+2026-07-14 (touchpad moved from `event5` to `event4`, `event5` became a different device
+("Video Bus"), and both daemons crashed on startup with `OSError: [Errno 22] Invalid
+argument` trying to read multitouch axes off the wrong device). Because of that, `DEVICE`
+and `KEYBOARD_DEVICE` are **no longer hardcoded** — both `touchpad-gestures.py` and
+`touchpad-doubletap.py` auto-detect them by device *name* (via `_find_device()`, matching
+`/sys/class/input/eventN/device/name`) every time the daemon process starts, so a reboot
+that reshuffles event numbers no longer breaks anything. `install.sh` just copies the
+scripts as-is now — see "Troubleshooting: daemon crashes with `OSError: Invalid argument`"
+below if a daemon ever still can't find its device.
 
 ## What's active right now
 
@@ -192,11 +201,11 @@ investigation:
    `_UPDATE` / `_END` lines with a finger count of `3`. If you see
    `GESTURE_HOLD` or 2-finger `POINTER_SCROLL_FINGER` instead and never
    `GESTURE_SWIPE` with `3`, the touchpad isn't reporting a 3-finger swipe
-   at all — check `DEVICE=` in the installed
-   `~/.local/bin/touchpad-gestures.py` still points at the right event
-   node (**re-detect it, it can change on reboot** — see the top of this
-   file) and confirm `systemctl --user status touchpad-gestures.service`
-   is actually running.
+   at all — confirm `systemctl --user status touchpad-gestures.service` is
+   actually running (if it's crash-looping, see "Troubleshooting: daemon
+   crashes with `OSError: Invalid argument`" below — `DEVICE` is
+   auto-detected by name at daemon startup now, not hardcoded, so this
+   should self-heal across reboots, but check there first if it doesn't).
 3. **If libinput sees the 3-finger swipe fine and the KWin script is
    loaded**, test the D-Bus path in isolation with a real window open and
    focused (an empty desktop with no windows means `workspace.activeWindow`
@@ -209,6 +218,43 @@ investigation:
    ```
    If the focused window minimizes, the whole chain works end-to-end and
    the daemon should too.
+
+## Troubleshooting: daemon crashes with `OSError: [Errno 22] Invalid argument`
+
+**Symptom:** `systemctl --user status touchpad-gestures.service` and/or
+`touchpad-doubletap.service` show `activating (auto-restart)` or a crash
+loop, with a traceback ending in something like:
+```
+File ".../evdev/device.py", line 411, in absinfo
+    return AbsInfo(*_input.ioctl_EVIOCGABS(self.fd, axis_num))
+OSError: [Errno 22] Invalid argument
+```
+
+**Root cause (confirmed 2026-07-14):** the daemon opened the wrong
+`/dev/input/eventN` node — one that exists but isn't the touchpad (e.g. a
+"Video Bus" or other unrelated device with no multitouch axes), so asking
+it for `ABS_MT_POSITION_X` fails outright. This happens because
+`/dev/input/eventN` numbering is assigned by the kernel at boot and isn't
+guaranteed stable — a plain reboot after a routine update reshuffled it
+here (touchpad went from `event5` to `event4`, and `event5` became a
+different device entirely).
+
+**Fix already in place:** both `touchpad-gestures.py` and
+`touchpad-doubletap.py` no longer hardcode `DEVICE`/`KEYBOARD_DEVICE`.
+`_find_device()` at the top of each script re-detects the right node by
+matching the device *name* (`touchpad` / `keyboard`, case-insensitive)
+against `/sys/class/input/eventN/device/name` every time the daemon
+process starts — so a `systemctl --user restart` or a fresh boot always
+picks the current, correct node. `install.sh` just copies the scripts as
+they are; it no longer patches a path in at install time.
+
+**If this still happens anyway** (e.g. a genuinely new machine where
+neither device name contains "touchpad"/"keyboard"):
+1. Confirm the real device names: `for f in /sys/class/input/event*/device/name; do echo "$f: $(cat "$f")"; done`
+2. Edit the substring passed to `_find_device(...)` at the top of the
+   affected script to match what's actually there, or hardcode `DEVICE =
+   "/dev/input/eventN"` directly as a last resort (matches this repo's
+   behavior before 2026-07-14).
 
 ## Known quirks / things to keep an eye on
 
@@ -297,9 +343,12 @@ Run `./install.sh`. It will:
 2. Add you to the `input` group (needed to read `/dev/input/eventN` — **log out and back
    in afterward**, or the daemons will only work via the `sg input -c` wrapper already
    baked into the systemd units, which is enough for the *first* run without logging out)
-3. Auto-detect the touchpad's **and** keyboard's event devices and patch both into
-   `touchpad-gestures.py` (the keyboard is only needed for Shift+pinch zoom, but the script
-   reads it unconditionally)
+3. Copy the daemon scripts as-is — no path patching needed. Both scripts auto-detect the
+   touchpad's (and, for `touchpad-gestures.py`, the keyboard's) event device by name at
+   every daemon startup, so this stays correct even on a machine you've never installed on
+   before, and re-detects itself again on every future reboot (the keyboard is only needed
+   for Shift+pinch zoom, but the script reads it unconditionally). See "Troubleshooting:
+   daemon crashes with `OSError: Invalid argument`" if detection ever fails.
 4. Install the KWin script, the three systemd `--user` services (the two gesture
    daemons plus `kwin-script-loader`, which works around the KWin script not
    reliably auto-loading on its own — see Troubleshooting), `ydotoold`'s systemd

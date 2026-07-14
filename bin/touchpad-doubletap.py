@@ -7,7 +7,33 @@ import time
 
 from evdev import InputDevice, ecodes
 
-DEVICE = "/dev/input/event5"
+
+def _find_device(name_substring, fallback):
+    """Auto-detect an input device by matching a substring against
+    /sys/class/input/eventN/device/name. Event numbers are machine-specific
+    and can shift after a kernel/driver update or a fresh boot, so this runs
+    fresh every time the daemon starts instead of trusting a hardcoded path.
+    Falls back to the last known-good path if nothing matches."""
+    base = "/sys/class/input"
+    try:
+        entries = sorted(
+            (e for e in os.listdir(base) if e.startswith("event")),
+            key=lambda e: int(e[len("event"):]),
+        )
+    except OSError:
+        return fallback
+    for entry in entries:
+        try:
+            with open(os.path.join(base, entry, "device", "name")) as f:
+                name = f.read().strip()
+        except OSError:
+            continue
+        if name_substring.lower() in name.lower():
+            return f"/dev/input/{entry}"
+    return fallback
+
+
+DEVICE = _find_device("touchpad", "/dev/input/event4")
 
 TAP_MAX_DURATION = 0.25   # seconds: single contact must lift within this to count as a tap
 DOUBLE_TAP_WINDOW = 0.4   # seconds: max gap between two taps to count as a double-tap
