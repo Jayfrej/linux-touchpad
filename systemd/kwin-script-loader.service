@@ -1,0 +1,11 @@
+[Unit]
+Description=Force-load the gesture-helper KWin script (works around KWin not reliably autoloading it from kwinrc at session start)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/kwin-script-loader.sh
+
+[Install]
+WantedBy=graphical-session.target

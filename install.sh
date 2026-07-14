@@ -58,6 +58,14 @@ systemctl --user daemon-reload
 systemctl --user enable --now touchpad-gestures.service
 systemctl --user enable --now touchpad-doubletap.service
 
+echo "==> Installing kwin-script-loader (works around gesture-helper not always"
+echo "    auto-loading from kwinrc on a fresh boot -- see README Troubleshooting)"
+cp bin/kwin-script-loader.sh "$HOME/.local/bin/"
+chmod +x "$HOME/.local/bin/kwin-script-loader.sh"
+cp systemd/kwin-script-loader.service "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+systemctl --user enable --now kwin-script-loader.service
+
 echo "==> Disabling tap-to-click (must press physically to click)"
 echo "    This step needs your touchpad's exact kcminputrc group name, which is"
 echo "    machine-specific. Open System Settings > Touchpad once (so KDE creates the"

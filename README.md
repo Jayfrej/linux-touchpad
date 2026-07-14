@@ -17,7 +17,7 @@ install or after a kernel/driver update** — always re-detect it (see `install.
 | 1 | `kcminputrc`: `TapToClick=false` | Disables tap-to-click; only a real physical press registers as a click | ✅ working |
 | 2 | `kcminputrc`: `NaturalScroll=true` | Mac-style natural scroll direction | ✅ was already on by default |
 | 3 | 4 virtual desktops (`kwinrc [Desktops]`) | Gives the native 3-finger left/right swipe (desktop switch) something to do | ✅ working, **but has reset itself to 1 desktop at least once this session for no clear reason — check `Number=` in `kwinrc [Desktops]` after every reboot** |
-| 4 | `gesture-helper` KWin script | Registers two custom global shortcuts (`GestureMinimizeActive`, `GestureRestoreLastMinimized`) that our daemon calls | ✅ working |
+| 4 | `gesture-helper` KWin script | Registers two custom global shortcuts (`GestureMinimizeActive`, `GestureRestoreLastMinimized`) that our daemon calls | ✅ working, **but does not reliably auto-load from `kwinrc` on a fresh boot — see "Troubleshooting: 3-finger swipe stops working after a reboot" below. `kwin-script-loader.service` force-loads it every session as a workaround.** |
 | 5 | `touchpad-gestures.service` | 3-finger up/down → minimize/restore window · pinch → switch app (Alt+Tab) · fast 2-finger horizontal scroll → Alt+Left/Right (Opera back/forward) | ✅ working |
 | 6 | `touchpad-doubletap.service` | Two quick light taps = one click (single light taps still do nothing) | ✅ confirmed working end-to-end |
 | 7 | `ydotool` + `ydotoold` | Lets our daemons send real key/click events on Wayland | ✅ working, **but see the "ydotool gotchas" section — the obvious commands don't work** |
@@ -118,6 +118,82 @@ reverted — see "Rejected approaches" below).
    properly-supported, compositor-aware way to do this on modern Wayland, ydotool
    predates it.
 
+## Troubleshooting: 3-finger swipe stops working after a reboot
+
+**Symptom:** everything else still works (tap-to-click, natural scroll, native
+3-finger left/right desktop switch, native 4-finger up/down Overview/Grid,
+double-tap-to-click) but 3-finger swipe up/down (minimize/restore) silently
+does nothing.
+
+This happened on 2026-07-14 after a plain reboot (no package updates
+involved) and was root-caused end-to-end as follows — check these in order,
+they're listed from "most likely" to "least likely" based on that
+investigation:
+
+1. **Check the KWin script is actually loaded (this was the actual cause
+   last time):**
+   ```
+   gdbus call --session --dest org.kde.KWin --object-path /Scripting \
+     --method org.kde.kwin.Scripting.isScriptLoaded "gesture-helper"
+   ```
+   If this prints `(false,)`, that's it — `gesture-helper` is installed
+   (`kpackagetool6 --type KWin/Script --list` shows it) and `kwinrc`
+   still has `[Plugins] gesture-helperEnabled=true`, but KWin did not
+   actually autoload it this session. Confusingly, `kglobalaccel` will
+   still list `GestureMinimizeActive` / `GestureRestoreLastMinimized` as
+   registered shortcuts (stale from a previous load) and invoking them
+   (`gdbus call --session --dest org.kde.kglobalaccel --object-path
+   /component/kwin --method org.kde.kglobalaccel.Component.invokeShortcut
+   "GestureMinimizeActive"`) returns success with **no error and no
+   effect** — it's a no-op because nothing live is bound to that shortcut
+   name anymore. `org.kde.KWin.reconfigure` does **not** fix this; it
+   reloads compositor/effects config, not the script loader (confirmed by
+   testing). The only thing that reliably re-loads it is calling
+   `org.kde.kwin.Scripting.loadScript` directly with the script's file
+   path, then `.start()`:
+   ```
+   gdbus call --session --dest org.kde.KWin --object-path /Scripting \
+     --method org.kde.kwin.Scripting.loadScript \
+     "$HOME/.local/share/kwin/scripts/gesture-helper/contents/code/main.js" \
+     "gesture-helper"
+   gdbus call --session --dest org.kde.KWin --object-path /Scripting \
+     --method org.kde.kwin.Scripting.start
+   ```
+   `kwin-script-loader.service` (installed by `install.sh`, see
+   `bin/kwin-script-loader.sh`) runs exactly this at every session start so
+   you shouldn't have to do it by hand — but if the gesture still doesn't
+   work after `install.sh`, check `systemctl --user status
+   kwin-script-loader.service` first.
+
+2. **If `isScriptLoaded` returns `true`**, the script itself is fine and the
+   problem is further down the chain. Confirm the daemon is actually seeing
+   3-finger swipes at the libinput level:
+   ```
+   libinput debug-events --device /dev/input/eventN
+   ```
+   (swap in the current touchpad event number — see the top of this file)
+   and do a real 3-finger swipe. You should see `GESTURE_SWIPE_BEGIN` /
+   `_UPDATE` / `_END` lines with a finger count of `3`. If you see
+   `GESTURE_HOLD` or 2-finger `POINTER_SCROLL_FINGER` instead and never
+   `GESTURE_SWIPE` with `3`, the touchpad isn't reporting a 3-finger swipe
+   at all — check `DEVICE=` in the installed
+   `~/.local/bin/touchpad-gestures.py` still points at the right event
+   node (**re-detect it, it can change on reboot** — see the top of this
+   file) and confirm `systemctl --user status touchpad-gestures.service`
+   is actually running.
+3. **If libinput sees the 3-finger swipe fine and the KWin script is
+   loaded**, test the D-Bus path in isolation with a real window open and
+   focused (an empty desktop with no windows means `workspace.activeWindow`
+   is null and `gestureMinimizeActive()` does nothing — not a bug, just an
+   invalid test):
+   ```
+   gdbus call --session --dest org.kde.kglobalaccel --object-path \
+     /component/kwin --method org.kde.kglobalaccel.Component.invokeShortcut \
+     "GestureMinimizeActive"
+   ```
+   If the focused window minimizes, the whole chain works end-to-end and
+   the daemon should too.
+
 ## Known quirks / things to keep an eye on
 
 - This touchpad reports **every pinch gesture as `fingers=4`**, regardless of how many
@@ -156,7 +232,9 @@ Run `./install.sh`. It will:
    in afterward**, or the daemons will only work via the `sg input -c` wrapper already
    baked into the systemd units, which is enough for the *first* run without logging out)
 3. Auto-detect the touchpad's event device and patch it into both scripts
-4. Install the KWin script, the two systemd `--user` services, `ydotoold`'s systemd
+4. Install the KWin script, the three systemd `--user` services (the two gesture
+   daemons plus `kwin-script-loader`, which works around the KWin script not
+   reliably auto-loading on its own — see Troubleshooting), `ydotoold`'s systemd
    override + udev rule, and enable everything
 5. Print the manual command you need for step 1 (`TapToClick=false`) because it requires
    a machine-specific `kcminputrc` group name (vendor/product/device-name triplet) that
@@ -172,7 +250,8 @@ sections first, they cover everything that wasn't obvious the first time around.
 ```
 bin/touchpad-gestures.py       3-finger swipes, pinch app-switch, 2-finger back/forward
 bin/touchpad-doubletap.py      double-tap-to-click
-systemd/*.service              systemd --user units for the two daemons above
+bin/kwin-script-loader.sh      force-loads gesture-helper over D-Bus (see Troubleshooting)
+systemd/*.service              systemd --user units for the daemons + kwin-script-loader above
 kwin-script/gesture-helper/    KWin script providing the minimize/restore shortcuts
 udev/99-ydotool-mouse.rules    tags ydotoold's virtual device as a mouse
 systemd-ydotool-override/      makes ydotoold's socket usable by a normal user
