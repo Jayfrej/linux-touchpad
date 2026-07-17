@@ -47,6 +47,7 @@ below if a daemon ever still can't find its device.
 | **Shift + pinch in / out** | Zoom out / in (KWin's built-in Zoom accessibility effect, `view_zoom_out` / `view_zoom_in`) — fires proportionally as you pinch, not just once per gesture |
 | 4-finger swipe up/down | Overview / Grid view (native Plasma default) |
 | Fast 2-finger swipe left/right (in-app, e.g. Opera) | Back / Forward (sends Alt+Left / Alt+Right) |
+| 1-finger right-edge vertical swipe | Increase / Decrease volume (adjusts kmix volume) |
 | Two quick light taps | Click |
 
 Things intentionally **not** bound: 4-finger swipe left/right (tried it for app-switching,
@@ -371,7 +372,7 @@ sections first, they cover everything that wasn't obvious the first time around.
 ## Files in this repo
 
 ```
-bin/touchpad-gestures.py       3-finger swipes/taps, pinch app-switch/zoom, 2-finger back/forward
+bin/touchpad-gestures.py       3-finger swipes/taps, pinch app-switch/zoom, 2-finger back/forward, right-edge volume
 bin/touchpad-doubletap.py      double-tap-to-click
 bin/kwin-script-loader.sh      force-loads gesture-helper over D-Bus (see Troubleshooting)
 systemd/*.service              systemd --user units for the daemons + kwin-script-loader above

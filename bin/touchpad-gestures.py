@@ -88,12 +88,12 @@ SCROLL_RE = re.compile(
 )
 
 
-def invoke_shortcut(name):
+def invoke_shortcut(name, component="kwin"):
     subprocess.run(
         [
             "gdbus", "call", "--session",
             "--dest", "org.kde.kglobalaccel",
-            "--object-path", "/component/kwin",
+            "--object-path", f"/component/{component}",
             "--method", "org.kde.kglobalaccel.Component.invokeShortcut",
             name,
         ],
@@ -128,20 +128,20 @@ def handle_swipe(fingers, dx, dy):
     # left/right 3-finger: leave to KWin's native virtual-desktop switch gesture
 
 
-def watch_three_finger_tap():
+def watch_raw_touchpad_events():
     """Background thread: detects a light 3-finger tap (no dragging) by
-    reading raw multitouch protocol B events directly, the same way
-    touchpad-doubletap.py detects single-finger taps -- libinput emits
-    nothing at all for a light tap once TapToClick is off, gestures
-    included, so this can't be read from `libinput debug-events` like
-    swipes/pinches are."""
+    reading raw multitouch protocol B events directly. Also detects
+    single-finger right-edge vertical swipes for volume control."""
     dev = InputDevice(DEVICE)
     x_info = dev.absinfo(ecodes.ABS_MT_POSITION_X)
     y_info = dev.absinfo(ecodes.ABS_MT_POSITION_Y)
     max_move_x = (x_info.max - x_info.min) * THREE_TAP_MAX_MOVEMENT
     max_move_y = (y_info.max - y_info.min) * THREE_TAP_MAX_MOVEMENT
+    
+    right_edge_x = x_info.max - (x_info.max - x_info.min) * 0.25
+    vol_step_y = (y_info.max - y_info.min) * 0.015
 
-    contacts = {}          # slot -> {"start_x", "start_y", "x", "y"}
+    contacts = {}          # slot -> {"start_x", "start_y", "x", "y", "vol_y"}
     current_slot = 0
     group_start_time = None
     peak_count = 0
@@ -162,7 +162,7 @@ def watch_three_finger_tap():
                     group_start_time = now
                     peak_count = 0
                     tainted = False
-                contacts[current_slot] = {"start_x": None, "start_y": None, "x": None, "y": None}
+                contacts[current_slot] = {"start_x": None, "start_y": None, "x": None, "y": None, "vol_y": None}
                 peak_count = max(peak_count, len(contacts))
                 if peak_count > 3:
                     tainted = True
@@ -186,6 +186,7 @@ def watch_three_finger_tap():
                 c["x"] = event.value
                 if c["start_x"] is None:
                     c["start_x"] = event.value
+                    print(f"DEBUG: Finger down start_x={c['start_x']}, right_edge={right_edge_x} (max={x_info.max})", flush=True)
                 elif abs(c["x"] - c["start_x"]) > max_move_x:
                     tainted = True
 
@@ -195,8 +196,22 @@ def watch_three_finger_tap():
                 c["y"] = event.value
                 if c["start_y"] is None:
                     c["start_y"] = event.value
+                    c["vol_y"] = event.value
                 elif abs(c["y"] - c["start_y"]) > max_move_y:
                     tainted = True
+                
+                if len(contacts) == 1 and c["start_x"] is not None:
+                    if c["start_x"] > right_edge_x:
+                        if c["vol_y"] is not None:
+                            dy = c["y"] - c["vol_y"]
+                            if dy > vol_step_y:
+                                print(f"Volume DOWN: dy={dy} > step={vol_step_y}", flush=True)
+                                invoke_shortcut("decrease_volume", component="kmix")
+                                c["vol_y"] += vol_step_y
+                            elif dy < -vol_step_y:
+                                print(f"Volume UP: dy={dy} < -step={-vol_step_y}", flush=True)
+                                invoke_shortcut("increase_volume", component="kmix")
+                                c["vol_y"] -= vol_step_y
 
 
 def handle_pinch(scale, shift_held):
@@ -299,7 +314,7 @@ def main():
 
     keyboard_state = {"shift": False}
     threading.Thread(target=watch_shift_key, args=(keyboard_state,), daemon=True).start()
-    threading.Thread(target=watch_three_finger_tap, daemon=True).start()
+    threading.Thread(target=watch_raw_touchpad_events, daemon=True).start()
 
     gesture_type = None
     gesture_shift = False
