@@ -64,7 +64,11 @@ KEY_LEFTCTRL = "29"
 KEY_LEFTALT = "56"
 KEY_LEFT = "105"
 KEY_RIGHT = "106"
+KEY_DOWN = "108"
 KEY_D = "32"
+KEY_C = "46"
+KEY_TAB = "15"
+KEY_LEFTSHIFT = "42"
 
 # Application Dashboard (org.kde.plasma.kickerdash, pinned to the bottom
 # panel) has no D-Bus/kglobalaccel toggle of its own -- kglobalaccel only
@@ -113,18 +117,15 @@ def send_alt_arrow(direction):
 
 
 def handle_swipe(fingers, dx, dy):
-    """3-finger swipe up/down (minimize/restore). A dragged gesture like
+    """3-finger swipe up/down (Cube). A dragged gesture like
     this reads fine straight from libinput, unlike the light tap handled
-    by watch_three_finger_tap below."""
+    by watch_raw_touchpad_events below."""
     if fingers != 3:
         return
     if abs(dx) < SWIPE_MIN_DISTANCE and abs(dy) < SWIPE_MIN_DISTANCE:
         return
     if abs(dy) > abs(dx):
-        if dy > 0:
-            invoke_shortcut("GestureMinimizeActive")
-        else:
-            invoke_shortcut("GestureRestoreLastMinimized")
+        invoke_shortcut("Cube")
     # left/right 3-finger: leave to KWin's native virtual-desktop switch gesture
 
 
@@ -138,10 +139,14 @@ def watch_raw_touchpad_events():
     max_move_x = (x_info.max - x_info.min) * THREE_TAP_MAX_MOVEMENT
     max_move_y = (y_info.max - y_info.min) * THREE_TAP_MAX_MOVEMENT
     
-    right_edge_x = x_info.max - (x_info.max - x_info.min) * 0.25
+    right_edge_x = x_info.max - (x_info.max - x_info.min) * 0.10
+    left_edge_x = x_info.min + (x_info.max - x_info.min) * 0.10
+    bottom_edge_y = y_info.max - (y_info.max - y_info.min) * 0.10
     vol_step_y = (y_info.max - y_info.min) * 0.015
+    left_swipe_threshold_y = (y_info.max - y_info.min) * 0.05
+    horiz_step_x = (x_info.max - x_info.min) * 0.30
 
-    contacts = {}          # slot -> {"start_x", "start_y", "x", "y", "vol_y"}
+    contacts = {}          # slot -> {"start_x", "start_y", "x", "y", "vol_y", "left_action_fired", "bottom_active", "last_tab_x"}
     current_slot = 0
     group_start_time = None
     peak_count = 0
@@ -162,12 +167,12 @@ def watch_raw_touchpad_events():
                     group_start_time = now
                     peak_count = 0
                     tainted = False
-                contacts[current_slot] = {"start_x": None, "start_y": None, "x": None, "y": None, "vol_y": None}
+                contacts[current_slot] = {"start_x": None, "start_y": None, "x": None, "y": None, "vol_y": None, "left_action_fired": False, "bottom_active": False, "last_tab_x": None}
                 peak_count = max(peak_count, len(contacts))
                 if peak_count > 3:
                     tainted = True
             else:
-                contacts.pop(current_slot, None)
+                c = contacts.pop(current_slot, None)
                 if not contacts and group_start_time is not None:
                     duration = now - group_start_time
                     is_tap = not tainted and peak_count == 3 and duration <= THREE_TAP_MAX_DURATION
@@ -186,9 +191,25 @@ def watch_raw_touchpad_events():
                 c["x"] = event.value
                 if c["start_x"] is None:
                     c["start_x"] = event.value
-                    print(f"DEBUG: Finger down start_x={c['start_x']}, right_edge={right_edge_x} (max={x_info.max})", flush=True)
+                    c["left_action_fired"] = False
+                    c["bottom_active"] = False
+                    c["last_tab_x"] = event.value
                 elif abs(c["x"] - c["start_x"]) > max_move_x:
                     tainted = True
+                
+                if len(contacts) == 1 and c["start_y"] is not None and c["start_x"] is not None:
+                    if c["start_y"] > bottom_edge_y and left_edge_x < c["start_x"] < right_edge_x:
+                        dx = c["x"] - c["last_tab_x"]
+                        if not c.get("bottom_active") and abs(dx) > horiz_step_x:
+                            c["bottom_active"] = True
+                        
+                        if c.get("bottom_active"):
+                            if dx > horiz_step_x:
+                                invoke_shortcut("Walk Through Windows")
+                                c["last_tab_x"] += horiz_step_x
+                            elif dx < -horiz_step_x:
+                                invoke_shortcut("Walk Through Windows (Reverse)")
+                                c["last_tab_x"] -= horiz_step_x
 
         elif event.code == ecodes.ABS_MT_POSITION_Y:
             c = contacts.get(current_slot)
@@ -212,19 +233,22 @@ def watch_raw_touchpad_events():
                                 print(f"Volume UP: dy={dy} < -step={-vol_step_y}", flush=True)
                                 invoke_shortcut("increase_volume", component="kmix")
                                 c["vol_y"] -= vol_step_y
+                    elif c["start_x"] < left_edge_x and not c.get("left_action_fired"):
+                        if c["start_y"] is not None:
+                            dy = c["y"] - c["start_y"]
+                            if dy > left_swipe_threshold_y:
+                                invoke_shortcut("GestureMinimizeActive")
+                                c["left_action_fired"] = True
+                            elif dy < -left_swipe_threshold_y:
+                                invoke_shortcut("GestureRestoreLastMinimized")
+                                c["left_action_fired"] = True
 
 
 def handle_pinch(scale, shift_held):
     # Shift+pinch is handled live, step-by-step, in main()'s PINCH_UPDATE
     # branch (see PinchZoomTracker) so zoom tracks finger spread in real
-    # time instead of firing once at gesture end. Only the plain
-    # (no-Shift) app-switch case is handled here, at gesture end.
-    if shift_held or scale is None:
-        return
-    if scale < 1.0:
-        invoke_shortcut("Walk Through Windows (Reverse)")
-    elif scale > 1.0:
-        invoke_shortcut("Walk Through Windows")
+    # time instead of firing once at gesture end.
+    pass
 
 
 class PinchZoomTracker:

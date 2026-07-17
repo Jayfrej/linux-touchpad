@@ -28,7 +28,7 @@ below if a daemon ever still can't find its device.
 | 2 | `kcminputrc`: `NaturalScroll=true` | Mac-style natural scroll direction | ✅ was already on by default |
 | 3 | 4 virtual desktops (`kwinrc [Desktops]`) | Gives the native 3-finger left/right swipe (desktop switch) something to do | ✅ working, **but has reset itself to 1 desktop at least once this session for no clear reason — check `Number=` in `kwinrc [Desktops]` after every reboot** |
 | 4 | `gesture-helper` KWin script | Registers two custom global shortcuts (`GestureMinimizeActive`, `GestureRestoreLastMinimized`) that our daemon calls | ✅ working, **but does not reliably auto-load from `kwinrc` on a fresh boot — see "Troubleshooting: 3-finger swipe stops working after a reboot" below. `kwin-script-loader.service` force-loads it every session as a workaround.** |
-| 5 | `touchpad-gestures.service` | 3-finger up/down → minimize/restore window · two quick 3-finger taps → Application Dashboard · pinch → switch app, Shift+pinch → zoom in/out · fast 2-finger horizontal scroll → Alt+Left/Right (Opera back/forward) | ✅ working |
+| 5 | `touchpad-gestures.service` | 3-finger up/down → Desktop Cube · 1-finger left-edge → minimize/restore · 1-finger bottom-edge → switch app · two quick 3-finger taps → Application Dashboard · Shift+pinch → zoom in/out · fast 2-finger horizontal scroll → Alt+Left/Right | ✅ working |
 | 6 | `touchpad-doubletap.service` | Two quick light taps = one click (single light taps still do nothing) | ✅ confirmed working end-to-end |
 | 7 | `ydotool` + `ydotoold` | Lets our daemons send real key/click events on Wayland | ✅ working, **but see the "ydotool gotchas" section — the obvious commands don't work** |
 | 8 | `99-ydotool-mouse.rules` (udev) | Tags ydotool's virtual input device as a mouse | ✅ applied. Note: even with this, synthetic **mouse motion** (`ydotool mousemove`) still does not move the cursor — see below. Only needed for the click path; may not even be required for that (never isolated/retested without it). |
@@ -39,11 +39,11 @@ below if a daemon ever still can't find its device.
 |---|---|
 | Physical press (not a light tap) | Click |
 | Two quick light taps | Click *(unverified, see #6 above)* |
-| 3-finger swipe down | Minimize active window |
-| 3-finger swipe up | Restore the window minimized by the swipe above |
+| 1-finger left-edge vertical swipe | Swipe down to minimize active window, swipe up to restore it |
+| 3-finger swipe up / down | Toggle Desktop Cube (`Cube` effect) |
 | **Two quick 3-finger taps** (no dragging) | Open the Application Dashboard (`org.kde.plasma.kickerdash`, the app-grid widget pinned to the bottom panel) — sends Ctrl+Alt+D, a shortcut bound to the real applet by hand, see below |
 | 3-finger swipe left/right | Switch virtual desktop (native Plasma default) |
-| Pinch in / out | Switch to previous / next app (`Walk Through Windows (Reverse)` / `Walk Through Windows`) |
+| 1-finger bottom-edge horizontal swipe | Switch to previous / next app (`Walk Through Windows (Reverse)` / `Walk Through Windows`) |
 | **Shift + pinch in / out** | Zoom out / in (KWin's built-in Zoom accessibility effect, `view_zoom_out` / `view_zoom_in`) — fires proportionally as you pinch, not just once per gesture |
 | 4-finger swipe up/down | Overview / Grid view (native Plasma default) |
 | Fast 2-finger swipe left/right (in-app, e.g. Opera) | Back / Forward (sends Alt+Left / Alt+Right) |
@@ -61,7 +61,7 @@ reverted — see "Rejected approaches" below).
   `org.kde.KWin.InputDevice.<eventN>` over D-Bus (or use the System Settings GUI, which
   does this for you). `reconfigure` only affects compositor/effects config, not per-device
   libinput settings.
-- **Minimize/restore, pinch-to-switch-app, 3-finger swipes**: Plasma 6 has no UI to bind
+- **Minimize/restore, edge swipes, 3-finger swipes**: Plasma 6 has no UI to bind
   touchpad gestures to arbitrary actions — only the four hardcoded defaults exist
   (3-finger L/R = desktop switch, 4-finger up = Overview, 4-finger down = Grid), compiled
   into KWin's C++ (`overvieweffect.cpp` etc.), not stored in any config file. The one
@@ -364,6 +364,10 @@ script it — see "Rejected approaches"): open the panel, right-click the Applic
 Dashboard icon → **Configure Keyboard Shortcut** → bind it to **Ctrl+Alt+D**. That exact
 combo is hardcoded as `APP_DASHBOARD_SHORTCUT` in `touchpad-gestures.py`; if you bind it to
 something else, update that constant to match.
+
+**Other required KDE configurations:**
+- **Desktop Cube:** Ensure the "Cube" desktop effect is enabled in KDE System Settings. The 3-finger vertical swipe triggers the `Cube` global shortcut directly via D-Bus.
+- **Sequential App Switching:** By default, KDE's Alt+Tab (Walk Through Windows) uses "Recently Used" order. For the 1-finger bottom-edge swipe to feel like a spatial left/right app switcher, you must change the Task Switcher sorting order. Go to **System Settings** -> **Window Management** -> **Task Switcher** and change the sorting to **Stacking Order**. (Or run: `kwriteconfig6 --file kwinrc --group TabBox --key SortOrder 1` and restart your session).
 
 Everything in the status table above is confirmed working as of this writing — if
 something regresses after a reinstall, check the "ydotool gotchas" and "Known quirks"
